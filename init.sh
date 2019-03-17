@@ -1,9 +1,10 @@
 #!/bin/bash
 
 set -e
+echo "Running $0 $1"
 
 appSetup () {
-
+	echo "Runnig samba setup"
 	# Set variables
 	DOMAIN=${DOMAIN:-SAMDOM.LOCAL}
 	DOMAINPASS=${DOMAINPASS:-youshouldsetapassword}
@@ -14,7 +15,7 @@ appSetup () {
 	INSECURELDAP=${INSECURELDAP:-false}
 	DNSFORWARDER=${DNSFORWARDER:-NONE}
 	HOSTIP=${HOSTIP:-NONE}
-	
+	USEOWNCERTS=${USEOWNCERTS:-false}
 	LDOMAIN=${DOMAIN,,}
 	UDOMAIN=${DOMAIN^^}
 	URDOMAIN=${UDOMAIN%%.*}
@@ -76,9 +77,21 @@ appSetup () {
 				\\\tldap server require strong auth = no\
 				" /etc/samba/smb.conf
 		fi
+		if [[ ${USEOWNCERTS,,} == "true" ]]; then
+			sed -i "/\[global\]/a \
+			\\\ttls enabled  = yes\\n\
+			tls keyfile  = /etc/samba/tls/${LDOMAIN}.key\\n\
+        	tls certfile = /etc/samba/tls/${LDOMAIN}.crt\\n\
+        	tls cafile   =\
+			" /etc/samba/smb.conf
+		fi
 		# Once we are set up, we'll make a file so that we know to use it if we ever spin this up again
+		echo setup smb.conf complete
+		cat /etc/samba/smb.conf
 		cp /etc/samba/smb.conf /etc/samba/external/smb.conf
 	else
+	    echo Found existing external smb.conf
+		cat /etc/samba/smb.conf
 		cp /etc/samba/external/smb.conf /etc/samba/smb.conf
 	fi
         
@@ -101,6 +114,7 @@ appSetup () {
 }
 
 appStart () {
+	echo "Runnig samba start"
 	/usr/bin/supervisord
 }
 

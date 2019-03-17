@@ -14,4 +14,5 @@ RUN apt-get install -y openvpn inetutils-ping
 # Set up script and run
 ADD init.sh /init.sh
 RUN chmod 755 /init.sh
-CMD /init.sh setup
+ENTRYPOINT [ "/init.sh" ]
+CMD [ "setup" ]
