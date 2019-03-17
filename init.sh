@@ -91,8 +91,8 @@ appSetup () {
 		cp /etc/samba/smb.conf /etc/samba/external/smb.conf
 	else
 	    echo Found existing external smb.conf
-		cat /etc/samba/smb.conf
 		cp /etc/samba/external/smb.conf /etc/samba/smb.conf
+		cat /etc/samba/smb.conf
 	fi
         
 	# Set up supervisor
