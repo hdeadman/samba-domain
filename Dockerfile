@@ -1,5 +1,6 @@
-FROM ubuntu:cosmic
-MAINTAINER Fmstrat <fmstrat@NOSPAM.NO>
+FROM ubuntu:eoan
+LABEL originalauthor="Fmstrat <fmstrat@NOSPAM.NO>"
+LABEL maintainer="Hal Deadman"
 
 ENV DEBIAN_FRONTEND noninteractive
 
