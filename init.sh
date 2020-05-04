@@ -64,7 +64,6 @@ appSetup () {
 			wins support = yes\\n\
 			template shell = /bin/bash\\n\
 			winbind nss info = rfc2307\\n\
-			rpc server dynamic port range = 1024-1300\\n\
 			idmap config ${URDOMAIN}: range = 10000-20000\\n\
 			idmap config ${URDOMAIN}: backend = ad\
 			" /etc/samba/smb.conf
