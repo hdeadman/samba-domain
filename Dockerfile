@@ -11,7 +11,7 @@ ENV DEBIAN_FRONTEND noninteractive
 RUN apt-get update && \
     apt-get upgrade -y && \
     apt-get install -y pkg-config && \
-    apt-get install -y attr acl samba smbclient ldap-utils winbind libnss-winbind libpam-winbind krb5-user krb5-kdc supervisor dnsutils && \
+    apt-get install -y attr acl samba smbclient ldb-tools ldap-utils winbind libnss-winbind libpam-winbind krb5-user krb5-kdc supervisor dnsutils && \
     apt-get install -y openvpn inetutils-ping openssl && \
     apt-get install -y nano vim
 
