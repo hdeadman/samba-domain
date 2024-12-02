@@ -1,13 +1,12 @@
 #!/bin/bash
 
 set -e
-echo "Running $0 $1"
 
 appSetup () {
-	echo "Runnig samba setup"
+
 	# Set variables
 	DOMAIN=${DOMAIN:-SAMDOM.LOCAL}
-	DOMAINPASS=${DOMAINPASS:-youshouldsetapassword}
+	DOMAINPASS=${DOMAINPASS:-youshouldsetapassword^123}
 	JOIN=${JOIN:-false}
 	JOINSITE=${JOINSITE:-NONE}
 	MULTISITE=${MULTISITE:-false}
@@ -15,7 +14,9 @@ appSetup () {
 	INSECURELDAP=${INSECURELDAP:-false}
 	DNSFORWARDER=${DNSFORWARDER:-NONE}
 	HOSTIP=${HOSTIP:-NONE}
-	USEOWNCERTS=${USEOWNCERTS:-false}
+	RPCPORTS=${RPCPORTS:-"49152-49172"}
+	DOMAIN_DC=${DOMAIN_DC:-${DOMAIN_DC}}
+
 	LDOMAIN=${DOMAIN,,}
 	UDOMAIN=${DOMAIN^^}
 	URDOMAIN=${UDOMAIN%%.*}
@@ -28,12 +29,12 @@ appSetup () {
 		sleep 30
 	fi
 
-        # Set host ip option
-        if [[ "$HOSTIP" != "NONE" ]]; then
+	# Set host ip option
+	if [[ "$HOSTIP" != "NONE" ]]; then
 		HOSTIP_OPTION="--host-ip=$HOSTIP"
-        else
+	else
 		HOSTIP_OPTION=""
-        fi
+	fi
 
 	# Set up samba
 	mv /etc/krb5.conf /etc/krb5.conf.orig
@@ -42,7 +43,9 @@ appSetup () {
 	echo "    dns_lookup_kdc = true" >> /etc/krb5.conf
 	echo "    default_realm = ${UDOMAIN}" >> /etc/krb5.conf
 	# If the finished file isn't there, this is brand new, we're not just moving to a new container
+	FIRSTRUN=false
 	if [[ ! -f /etc/samba/external/smb.conf ]]; then
+		FIRSTRUN=true
 		mv /etc/samba/smb.conf /etc/samba/smb.conf.orig
 		if [[ ${JOIN,,} == "true" ]]; then
 			if [[ ${JOINSITE} == "NONE" ]]; then
@@ -63,12 +66,15 @@ appSetup () {
 			\\\tidmap_ldb:use rfc2307 = yes\\n\
 			wins support = yes\\n\
 			template shell = /bin/bash\\n\
-			winbind nss info = rfc2307\\n\
-			rpc server dynamic port range = 1024-1300\\n\
-			idmap config ${URDOMAIN}: range = 10000-20000\\n\
-			idmap config ${URDOMAIN}: backend = ad\
+			template homedir = /home/%U\\n\
+			idmap config ${URDOMAIN} : schema_mode = rfc2307\\n\
+			idmap config ${URDOMAIN} : unix_nss_info = yes\\n\
+			idmap config ${URDOMAIN} : backend = ad\\n\
+			rpc server dynamic port range = ${RPCPORTS}\
 			" /etc/samba/smb.conf
+		sed -i "s/LOCALDC/${URDOMAIN}DC/g" /etc/samba/smb.conf
 		if [[ $DNSFORWARDER != "NONE" ]]; then
+			sed -i "/dns forwarder/d" /etc/samba/smb.conf
 			sed -i "/\[global\]/a \
 				\\\tdns forwarder = ${DNSFORWARDER}\
 				" /etc/samba/smb.conf
@@ -78,28 +84,18 @@ appSetup () {
 				\\\tldap server require strong auth = no\
 				" /etc/samba/smb.conf
 		fi
-		if [[ ${USEOWNCERTS,,} == "true" ]]; then
-			sed -i "/\[global\]/a \
-			\\\ttls enabled  = yes\\n\
-			tls keyfile  = /etc/samba/tls/${LDOMAIN}.key\\n\
-        	tls certfile = /etc/samba/tls/${LDOMAIN}.crt\\n\
-        	tls cafile   =\
-			" /etc/samba/smb.conf
-		fi
 		# Once we are set up, we'll make a file so that we know to use it if we ever spin this up again
-		echo setup smb.conf complete
-		cat /etc/samba/smb.conf
-		cp /etc/samba/smb.conf /etc/samba/external/smb.conf
+		cp -f /etc/samba/smb.conf /etc/samba/external/smb.conf
 	else
-	    echo Found existing external smb.conf
-		cp /etc/samba/external/smb.conf /etc/samba/smb.conf
-		cat /etc/samba/smb.conf
+		cp -f /etc/samba/external/smb.conf /etc/samba/smb.conf
 	fi
-        
+
 	# Set up supervisor
 	echo "[supervisord]" > /etc/supervisor/conf.d/supervisord.conf
 	echo "nodaemon=true" >> /etc/supervisor/conf.d/supervisord.conf
 	echo "" >> /etc/supervisor/conf.d/supervisord.conf
+	echo "[program:ntpd]" >> /etc/supervisor/conf.d/supervisord.conf
+	echo "command=/usr/sbin/ntpd -c /etc/ntpd.conf -n" >> /etc/supervisor/conf.d/supervisord.conf
 	echo "[program:samba]" >> /etc/supervisor/conf.d/supervisord.conf
 	echo "command=/usr/sbin/samba -i" >> /etc/supervisor/conf.d/supervisord.conf
 	if [[ ${MULTISITE,,} == "true" ]]; then
@@ -110,32 +106,87 @@ appSetup () {
 		echo "[program:openvpn]" >> /etc/supervisor/conf.d/supervisord.conf
 		echo "command=/usr/sbin/openvpn --config /docker.ovpn" >> /etc/supervisor/conf.d/supervisord.conf
 	fi
-	
-	appStart
+
+	echo "server 127.127.1.0" > /etc/ntpd.conf
+	echo "fudge  127.127.1.0 stratum 10" >> /etc/ntpd.conf
+	echo "server 0.pool.ntp.org     iburst prefer" >> /etc/ntpd.conf
+	echo "server 1.pool.ntp.org     iburst prefer" >> /etc/ntpd.conf
+	echo "server 2.pool.ntp.org     iburst prefer" >> /etc/ntpd.conf
+	echo "driftfile       /var/lib/ntp/ntp.drift" >> /etc/ntpd.conf
+	echo "logfile         /var/log/ntp" >> /etc/ntpd.conf
+	echo "ntpsigndsocket  /usr/local/samba/var/lib/ntp_signd/" >> /etc/ntpd.conf
+	echo "restrict default kod nomodify notrap nopeer mssntp" >> /etc/ntpd.conf
+	echo "restrict 127.0.0.1" >> /etc/ntpd.conf
+	echo "restrict 0.pool.ntp.org   mask 255.255.255.255    nomodify notrap nopeer noquery" >> /etc/ntpd.conf
+	echo "restrict 1.pool.ntp.org   mask 255.255.255.255    nomodify notrap nopeer noquery" >> /etc/ntpd.conf
+	echo "restrict 2.pool.ntp.org   mask 255.255.255.255    nomodify notrap nopeer noquery" >> /etc/ntpd.conf
+	echo "tinker panic 0" >> /etc/ntpd.conf
+
+	appStart ${FIRSTRUN}
+}
+
+fixDomainUsersGroup () {
+	GIDNUMBER=$(ldbedit -H /var/lib/samba/private/sam.ldb -e cat "samaccountname=domain users" | { grep ^gidNumber: || true; })
+	if [ -z "${GIDNUMBER}" ]; then
+		echo "dn: CN=Domain Users,CN=Users,${DOMAIN_DC}
+changetype: modify
+add: gidNumber
+gidNumber: 3000000" | ldbmodify -H /var/lib/samba/private/sam.ldb
+		net cache flush
+	fi
+}
+
+setupSSH () {
+	echo "dn: CN=sshPublicKey,CN=Schema,CN=Configuration,${DOMAIN_DC}
+changetype: add
+objectClass: top
+objectClass: attributeSchema
+attributeID: 1.3.6.1.4.1.24552.500.1.1.1.13
+cn: sshPublicKey
+name: sshPublicKey
+lDAPDisplayName: sshPublicKey
+description: MANDATORY: OpenSSH Public key
+attributeSyntax: 2.5.5.10
+oMSyntax: 4
+isSingleValued: FALSE
+objectCategory: CN=Attribute-Schema,CN=Schema,CN=Configuration,${DOMAIN_DC}
+searchFlags: 8
+schemaIDGUID:: cjDAZyEXzU+/akI0EGDW+g==" > /tmp/Sshpubkey.attr.ldif
+	echo "dn: CN=ldapPublicKey,CN=Schema,CN=Configuration,${DOMAIN_DC}
+changetype: add
+objectClass: top
+objectClass: classSchema
+governsID: 1.3.6.1.4.1.24552.500.1.1.2.0
+cn: ldapPublicKey
+name: ldapPublicKey
+description: MANDATORY: OpenSSH LPK objectclass
+lDAPDisplayName: ldapPublicKey
+subClassOf: top
+objectClassCategory: 3
+objectCategory: CN=Class-Schema,CN=Schema,CN=Configuration,${DOMAIN_DC}
+defaultObjectCategory: CN=ldapPublicKey,CN=Schema,CN=Configuration,${DOMAIN_DC}
+mayContain: sshPublicKey
+schemaIDGUID:: +8nFQ43rpkWTOgbCCcSkqA==" > /tmp/Sshpubkey.class.ldif
+	ldbadd -H /var/lib/samba/private/sam.ldb /var/lib/samba/private/sam.ldb /tmp/Sshpubkey.attr.ldif --option="dsdb:schema update allowed"=true
+	ldbadd -H /var/lib/samba/private/sam.ldb /var/lib/samba/private/sam.ldb /tmp/Sshpubkey.class.ldif --option="dsdb:schema update allowed"=true
 }
 
 appStart () {
-	echo "Runnig samba start"
-	/usr/bin/supervisord
+	/usr/bin/supervisord > /var/log/supervisor/supervisor.log 2>&1 &
+	if [ "${1}" = "true" ]; then
+		echo "Sleeping 10 before checking on Domain Users of gid 3000000 and setting up sshPublicKey"
+		sleep 10
+		fixDomainUsersGroup
+		setupSSH
+	fi
+	while [ ! -f /var/log/supervisor/supervisor.log ]; do
+		echo "Waiting for log files..."
+		sleep 1
+	done
+	sleep 3
+	tail -F /var/log/supervisor/*.log
 }
 
-case "$1" in
-	start)
-		if [[ -f /etc/samba/external/smb.conf ]]; then
-			cp /etc/samba/external/smb.conf /etc/samba/smb.conf
-			appStart
-		else
-			echo "Config file is missing."
-		fi
-		;;
-	setup)
-		# If the supervisor conf isn't there, we're spinning up a new container
-		if [[ -f /etc/supervisor/conf.d/supervisord.conf ]]; then
-			appStart
-		else
-			appSetup
-		fi
-		;;
-esac
+appSetup
 
 exit 0
